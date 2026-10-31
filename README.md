@@ -1,5 +1,5 @@
 
-# ExpenseTracker — AI‑Powered Serverless Expense Management (AWS)
+# ExpenseTracker: Serverless Expense Management with Receipt Scanning (AWS)
 
 > **Course**: CSCI 5409 – Advanced Topics in Cloud Computing  
 > **Tech**: AWS **Lambda**, **API Gateway**, **DynamoDB**, **S3**, **SNS**, **EventBridge**, **Textract** · **React (Vite + Tailwind)** · **Docker** · **CloudFormation**
@@ -16,7 +16,7 @@
   - **Upload receipt image** → **Textract** extracts the **total** and stores the image in **S3**.
 - **Current & previous months**: Fetch current-month totals and historical (previous months) expenses from **DynamoDB**.
 - **Monthly reports**: A scheduled Lambda (triggered by **EventBridge**) computes month summaries and sends users a report via **SNS**.
-- **IaC**: **CloudFormation** templates provision backend resources and a Docker‑ready EC2 for the frontend.
+- **IaC**: **CloudFormation** templates provision the Lambdas, API Gateway, SNS topic and EventBridge schedule, plus a Docker‑ready EC2 instance for the frontend.
 - **Dev UX**: Frontend built with **Vite + React + Tailwind**; single `dockerfile` to build and serve static assets.
 
 ---
@@ -83,7 +83,11 @@ CSCI5409-Term-Project/           # React SPA (Vite + Tailwind)
 ## Prerequisites
 - **AWS Account** with permissions to deploy CloudFormation stacks, Lambda, API Gateway, DynamoDB, S3, SNS, EventBridge, and EC2.
 - **IAM Role ARN** for Lambda execution (update in `IAC/cloudFormation.yaml`).
-- **Unique S3 bucket name** (global namespace) — update in code/templates where referenced.
+- **DynamoDB tables and S3 bucket created beforehand.** The CloudFormation template does not create them, and the Lambdas expect these names:
+  - `Term-Project-Application-Users` (partition key `useremail`): user accounts
+  - `Term-Project-Expense-Table` (partition key `useremail`): expenses
+  - `Term-Project-Reset-Password-Code` (partition key `useremail`): password-reset codes
+  - S3 bucket `term-project-expense-tracker-bucket`: receipt images. Bucket names are global, so you may need to change it in the Lambda code.
 - **EC2 AMI ImageId** and **KeyPair** for the frontend stack (`IAC/cloudFormationFrontEnd.yaml`).
 - **Node.js 18+** and **npm** locally (if you want to build the frontend).
 
@@ -140,39 +144,31 @@ npm run dev
 
 ---
 
-## API Endpoints (Representative)
-> Exact paths depend on your API Gateway configuration. Common pattern:
+## API Endpoints
 
-- `POST /register` → Register user (and subscribe to SNS topic)
-- `POST /login` → Authenticate user
-- `POST /expenses` → **Add expense** (body supports `expenseAmount` or `imageBase64` receipt)
-- `GET /expenses/current` → Current month totals & items
-- `GET /expenses/previous` → Previous months summary
-- `POST /password/reset` → Start password reset (SNS code/email)
-- `POST /password/change` → Change password
-- **Scheduled**: Monthly summary → `Send-Reports-lambda` via **EventBridge**
+All endpoints are `POST` routes on the API Gateway `prod` stage, and each has a CORS `OPTIONS` method:
 
-**Request example (Add Expense via receipt image):**
-```json
-POST /expenses
-{{
-  "useremail": "user@example.com",
-  "expenseName": "Lunch",
-  "imageBase64": "<base64-encoded-jpg>"
-}}
-```
-The API uploads the image to **S3**, uses **Textract AnalyzeDocument** to extract totals, persists to **DynamoDB**, and sends an **SNS** notification.
+| Path | Lambda | Purpose |
+|---|---|---|
+| `/register` | `Register-lambda` | Create an account and subscribe the email to SNS notifications |
+| `/login` | `login-lambda` | Authenticate a user |
+| `/reset-password` | `Reset-Password` | Email a numeric reset code |
+| `/change-password` | `change-password` | Set a new password using the code |
+| `/add-expense` | `Upload-expense` | Add an expense by amount, or by receipt image (S3 + Textract) |
+| `/get-current-expense` | `Get-Current-Month-Expense` | Current month's expenses and total |
+| `/get-all-expense` | `Get-Previous-Expense` | Expenses from previous months |
+
+**Scheduled:** an EventBridge rule (`cron(40 14 13 * ? *)`, on the 13th of each month) runs `Send-Reports-lambda`, which emails monthly summaries through SNS.
+
+When a receipt image is uploaded, the API stores it in **S3**, runs **Textract `AnalyzeDocument`** (TABLES and FORMS) to extract the total, saves the expense in **DynamoDB**, and sends an **SNS** notification.
 
 ---
 
 ## Data Model (DynamoDB)
-- **Table**: `Term-Project-Expense-Table`
-- **Partition key**: `useremail` (string)
-- **Attributes**:
-  - `months` (map): `{{ "YYYY-MM": {{ "total": number, "items": [ {{name, amount, expenseImageUrl}} ] }} }}`
-  - Other user metadata as needed (e.g., hashed password, salts)
+- **Users** (`Term-Project-Application-Users`): email, SHA-256 password hash, and SNS subscription status
+- **Expenses** (`Term-Project-Expense-Table`), partition key `useremail`:
+  - `expenses` (map): `{ "YYYY-MM": [ { expenseName, amount, expenseImageUrl } ] }`, a list of expenses for each month
 
-> *From code inspection: items are grouped by `{YYYY-MM}`, each item stores `expenseName`, `amount`, and optional `expenseImageUrl`.*
 
 ---
 
@@ -193,8 +189,7 @@ The API uploads the image to **S3**, uses **Textract AnalyzeDocument** to extrac
 ---
 
 ## Running Tests
-- Use **Postman** or **curl** to exercise endpoints.  
-- For frontend, write component/integration tests (e.g., React Testing Library) and run `npm test` (if configured).
+There are no automated tests in this repository. The API was tested manually with Postman/curl against the deployed endpoints.
 
 ---
 
@@ -203,13 +198,10 @@ The API uploads the image to **S3**, uses **Textract AnalyzeDocument** to extrac
 - Export reports (CSV/PDF) and email via SES.
 - Multi‑tenant auth via Cognito with JWTs.
 - Replace manual image upload with presigned S3 URLs.
-- Infrastructure as code: split stacks and add Outputs for API base URL & bucket names.
+- Infrastructure as code: create the DynamoDB tables and S3 bucket in the template, and pass the API URL to the frontend automatically.
 
 ---
 
-## License
-Educational project — check course requirements before publishing publicly.
+## About
+Built as a course project for CSCI 5409 (Advanced Topics in Cloud Computing) at Dalhousie University.
 
----
-
-*Last updated: 2025-10-31*
